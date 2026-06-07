@@ -134,13 +134,15 @@ func (s *Swissecho) dispatch(msg *SwissechoMessage) (interface{}, error) {
 	// 2. Resolve Gateway
 	gatewayName := msg.GatewayName
 	if gatewayName == "" {
-		// Geo-routing fallback
-		placeName := msg.PlaceName
-		if place, ok := routeConfig.Places[placeName]; ok && placeName != "" {
-			gatewayName = place.Gateway
-			msg.PhoneCode = place.PhoneCode
-		} else {
-			gatewayName = routeConfig.DefaultGateway
+		// Geo-routing fallback — only attempt if the route actually exists
+		if exists {
+			placeName := msg.PlaceName
+			if place, ok := routeConfig.Places[placeName]; ok && placeName != "" {
+				gatewayName = place.Gateway
+				msg.PhoneCode = place.PhoneCode
+			} else {
+				gatewayName = routeConfig.DefaultGateway
+			}
 		}
 	}
 
@@ -179,8 +181,10 @@ func (s *Swissecho) dispatch(msg *SwissechoMessage) (interface{}, error) {
 	// 4. Format numbers
 	var formattedNumbers []string
 	for _, num := range msg.Recipients {
+		// Strip leading + sign
 		num = strings.TrimPrefix(num, "+")
-		num = strings.TrimPrefix(num, "0")
+		// Strip all leading zeros (e.g. 0081... -> 81...)
+		num = strings.TrimLeft(num, "0")
 		if msg.PhoneCode != "" && !strings.HasPrefix(num, msg.PhoneCode) {
 			num = msg.PhoneCode + num
 		}

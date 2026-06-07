@@ -3,7 +3,9 @@ package swissecho
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -19,14 +21,24 @@ type MemoryQueue struct {
 }
 
 func NewMemoryQueue() *MemoryQueue {
+	return NewMemoryQueueWithSize(1000)
+}
+
+// NewMemoryQueueWithSize creates a MemoryQueue with a custom buffer size.
+// Useful for testing or tuning throughput.
+func NewMemoryQueueWithSize(size int) *MemoryQueue {
 	return &MemoryQueue{
-		ch: make(chan *SwissechoMessage, 1000), // Buffer size 1000
+		ch: make(chan *SwissechoMessage, size),
 	}
 }
 
 func (q *MemoryQueue) Push(msg *SwissechoMessage) error {
-	q.ch <- msg
-	return nil
+	select {
+	case q.ch <- msg:
+		return nil
+	default:
+		return fmt.Errorf("swissecho: memory queue is full (buffer size %d)", cap(q.ch))
+	}
 }
 
 func (q *MemoryQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (interface{}, error)) {
@@ -81,6 +93,7 @@ func (q *RedisQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoM
 				result, err := q.client.BRPop(q.ctx, 0, "swissecho_queue").Result()
 				if err != nil {
 					log.Printf("[Swissecho Redis Error] BRPop failed: %v\n", err)
+					time.Sleep(2 * time.Second) // back off before retrying
 					continue
 				}
 

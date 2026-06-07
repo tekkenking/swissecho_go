@@ -23,28 +23,32 @@ func (t *TermiiGateway) Boot(config swissecho.GatewayConfig, msg *swissecho.Swis
 }
 
 func (t *TermiiGateway) Send() (interface{}, error) {
-	apiKey, ok := t.config.Auth["api_key"]
+	// Capture locally to avoid data races if the same struct is reused concurrently
+	config := t.config
+	msg := t.msg
+
+	apiKey, ok := config.Auth["api_key"]
 	if !ok {
 		return nil, fmt.Errorf("termii gateway requires 'api_key' in Auth config")
 	}
 
-	url := t.config.URL
+	url := config.URL
 	if url == "" {
 		url = "https://api.ng.termii.com/api/sms/send"
 	}
 
 	channel := "generic"
-	if t.msg.RouteName == "whatsapp" {
+	if msg.RouteName == "whatsapp" {
 		channel = "whatsapp"
 	}
 
 	payload := map[string]interface{}{
-		"to":       strings.Join(t.msg.Recipients, ","),
-		"from":     t.msg.SenderID,
-		"sms":      t.msg.Body,
-		"type":     "plain",
-		"channel":  channel,
-		"api_key":  apiKey,
+		"to":      strings.Join(msg.Recipients, ","),
+		"from":    msg.SenderID,
+		"sms":     msg.Body,
+		"type":    "plain",
+		"channel": channel,
+		"api_key": apiKey,
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -61,6 +65,15 @@ func (t *TermiiGateway) Send() (interface{}, error) {
 	var result map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode termii response: %w", err)
+	}
+
+	// Treat non-2xx responses as errors
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message, _ := result["message"].(string)
+		if message == "" {
+			message = resp.Status
+		}
+		return nil, fmt.Errorf("termii API error (HTTP %d): %s", resp.StatusCode, message)
 	}
 
 	return result, nil
