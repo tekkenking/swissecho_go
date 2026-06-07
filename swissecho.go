@@ -2,23 +2,45 @@ package swissecho
 
 import (
 	"fmt"
+	"log"
 	"strings"
 )
 
 // Swissecho is the main client for interacting with the messaging service.
 type Swissecho struct {
 	Config Config
+	queue  DispatchQueue
 }
 
 // New creates a new Swissecho instance with the provided configuration.
 func New(config Config) *Swissecho {
-	return &Swissecho{Config: config}
+	s := &Swissecho{Config: config}
+
+	if config.Queue.Enabled {
+		if config.Queue.QueueChannel == "redis" {
+			s.queue = NewRedisQueue(config.Queue.Redis)
+		} else {
+			s.queue = NewMemoryQueue()
+		}
+		s.queue.StartWorkers(config.Queue.Workers, s.dispatch)
+	}
+
+	return s
 }
 
-// Quick sends a simple message using default settings.
+// Quick sends a simple message using default settings synchronously.
 func (s *Swissecho) Quick(to, content string) (interface{}, error) {
 	msg := NewMessage().To(to).Content(content)
 	return s.dispatch(msg)
+}
+
+// QuickAsync sends a simple message asynchronously via the configured queue.
+func (s *Swissecho) QuickAsync(to, content string) error {
+	msg := NewMessage().To(to).Content(content)
+	if !s.Config.Queue.Enabled {
+		return fmt.Errorf("queue is not enabled in config")
+	}
+	return s.queue.Push(msg)
 }
 
 // Gateway allows you to quickly override the default gateway.
@@ -77,8 +99,17 @@ func (r *SwissechoRunner) Route(route string) *SwissechoRunner {
 	return r
 }
 
+// Go sends the message synchronously and waits for the response.
 func (r *SwissechoRunner) Go() (interface{}, error) {
 	return r.sw.dispatch(r.msg)
+}
+
+// GoAsync pushes the message to the background queue to be processed asynchronously.
+func (r *SwissechoRunner) GoAsync() error {
+	if !r.sw.Config.Queue.Enabled {
+		return fmt.Errorf("queue is not enabled in config")
+	}
+	return r.sw.queue.Push(r.msg)
 }
 
 // dispatch handles the core routing and delegation to gateways.
@@ -160,8 +191,15 @@ func (s *Swissecho) dispatch(msg *SwissechoMessage) (interface{}, error) {
 	// 5. Execute
 	gw := gatewayConfig.Class
 	if err := gw.Boot(gatewayConfig, msg); err != nil {
+		log.Printf("[Swissecho Dispatch Error] Boot failed: %v\n", err)
 		return nil, err
 	}
 
-	return gw.Send()
+	result, err := gw.Send()
+	if err != nil {
+		log.Printf("[Swissecho Dispatch Error] Send failed: %v\n", err)
+		return nil, err
+	}
+
+	return result, nil
 }

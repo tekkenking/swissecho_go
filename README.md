@@ -34,6 +34,11 @@ func main() {
 		Enabled:       true, // Set to false to trigger mock mode
 		DefaultRoute:  "sms",
 		DefaultSender: "MyApp",
+		Queue: swissecho.QueueConfig{
+			Enabled:      true,
+			QueueChannel: "memory", // "memory" or "redis"
+			Workers:      5,
+		},
 		Routes: map[string]swissecho.RouteConfig{
 			"sms": {
 				DefaultGateway: "termii",
@@ -66,6 +71,15 @@ client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMess
         Content("Your order has been shipped!").
         Line("Track it at https://example.com/track")
 }).Go()
+```
+
+### Async Queueing
+If `Queue.Enabled` is true, you can send messages asynchronously. The internal worker pool will process them without blocking your main thread. Errors are automatically logged.
+
+```go
+err := client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
+    return m.To("2348012345678").Content("This is sent in the background!")
+}).GoAsync()
 ```
 
 ### Custom Gateways

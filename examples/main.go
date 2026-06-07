@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/tekkenking/swissecho_go"
 	"github.com/tekkenking/swissecho_go/gateways"
@@ -15,6 +16,11 @@ func main() {
 		Fake:          "log",
 		DefaultRoute:  "sms",
 		DefaultSender: "MyBrand",
+		Queue: swissecho.QueueConfig{
+			Enabled:      true,
+			QueueChannel: "memory", // Use "memory" or "redis"
+			Workers:      2,
+		},
 		Routes: map[string]swissecho.RouteConfig{
 			"sms": {
 				DefaultGateway: "termii",
@@ -59,9 +65,21 @@ func main() {
 		log.Println("Route Error:", err)
 	}
 
-	// 4. Mock Mode Example
+	// 4. Async Queue Sending
+	fmt.Println("\n--- Async Queue Send ---")
+	err = client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
+		return m.To("2348022222222").Content("This is sent via background worker!")
+	}).GoAsync()
+	if err != nil {
+		log.Println("Async Error:", err)
+	}
+
+	// 5. Mock Mode Example
 	fmt.Println("\n--- Mock Mode Send ---")
 	config.Enabled = false // Disable sending globally
 	mockClient := swissecho.New(config)
 	_, _ = mockClient.Message().To("2348099999999").Content("This should just be logged").Go()
+
+	// Wait briefly to allow async worker to process the message before exiting
+	time.Sleep(1 * time.Second)
 }

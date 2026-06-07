@@ -8,6 +8,22 @@ type Config struct {
 	DefaultSender string
 	DefaultRoute  string
 	Routes        map[string]RouteConfig
+	Queue         QueueConfig
+}
+
+// QueueConfig configures background dispatching
+type QueueConfig struct {
+	Enabled      bool
+	QueueChannel string // "memory" or "redis"
+	Workers      int    // Number of concurrent workers (default 5)
+	Redis        RedisConfig
+}
+
+// RedisConfig configures the redis connection if QueueChannel is "redis"
+type RedisConfig struct {
+	Addr     string
+	Password string
+	DB       int
 }
 
 // RouteConfig represents configuration for a specific route (e.g. sms, voice).
