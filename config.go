@@ -35,11 +35,12 @@ type RouteConfig struct {
 
 // GatewayConfig represents configuration for a specific gateway provider.
 type GatewayConfig struct {
-	Class  Gateway
-	URL    string
-	Auth   map[string]string
-	Sender string
-	Extras map[string]interface{}
+	Class   Gateway
+	URL     string
+	Auth    map[string]string
+	Sender  string
+	Extras  map[string]interface{}
+	Webhook WebhookConfig
 }
 
 // Place represents a geographic routing location.

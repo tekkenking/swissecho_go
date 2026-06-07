@@ -13,7 +13,6 @@ import (
 // Test Helpers / Fake Gateway
 // --------------------------------------------------------------------------
 
-// fakeGateway is a controllable Gateway implementation for testing.
 type fakeGateway struct {
 	bootCalled bool
 	bootErr    error
@@ -38,7 +37,6 @@ func (f *fakeGateway) Send() (interface{}, error) {
 	return "ok", nil
 }
 
-// buildConfig creates a minimal Config with a single SMS route using the given gateway.
 func buildConfig(gw swissecho.Gateway) swissecho.Config {
 	return swissecho.Config{
 		Enabled:       true,
@@ -89,10 +87,12 @@ func TestMessage_To_IgnoresEmptyParts(t *testing.T) {
 	}
 }
 
-func TestMessage_Content(t *testing.T) {
-	msg := swissecho.NewMessage().Content("Hello!")
-	if msg.Body != "Hello!" {
-		t.Errorf("expected body 'Hello!', got %q", msg.Body)
+func TestMessage_Content_AppendsLikePhp(t *testing.T) {
+	// In PHP, content() is an alias for line() — calling it twice appends.
+	msg := swissecho.NewMessage().Content("Line 1").Content("Line 2")
+	expected := "Line 1\nLine 2"
+	if msg.Body != expected {
+		t.Errorf("expected %q, got %q", expected, msg.Body)
 	}
 }
 
@@ -111,10 +111,24 @@ func TestMessage_Line_OnEmptyBody(t *testing.T) {
 	}
 }
 
-func TestMessage_Sender(t *testing.T) {
+func TestMessage_Sender_TruncatesTo11Chars(t *testing.T) {
+	msg := swissecho.NewMessage().Sender("VeryLongSenderIDHere")
+	if len(msg.SenderID) > 11 {
+		t.Errorf("expected sender to be truncated to 11 chars, got %d: %q", len(msg.SenderID), msg.SenderID)
+	}
+}
+
+func TestMessage_Sender_ShortNameUnchanged(t *testing.T) {
 	msg := swissecho.NewMessage().Sender("MySender")
 	if msg.SenderID != "MySender" {
 		t.Errorf("expected sender 'MySender', got %q", msg.SenderID)
+	}
+}
+
+func TestMessage_Sender_ExactlyEleven(t *testing.T) {
+	msg := swissecho.NewMessage().Sender("12345678901")
+	if msg.SenderID != "12345678901" {
+		t.Errorf("expected exact 11-char sender unchanged, got %q", msg.SenderID)
 	}
 }
 
@@ -132,14 +146,48 @@ func TestMessage_Gateway(t *testing.T) {
 	}
 }
 
+func TestMessage_Place(t *testing.T) {
+	msg := swissecho.NewMessage().Place("nga")
+	if msg.PlaceName != "nga" {
+		t.Errorf("expected place 'nga', got %q", msg.PlaceName)
+	}
+}
+
+func TestMessage_Identifier(t *testing.T) {
+	msg := swissecho.NewMessage().Identifier(42)
+	if msg.IdentifierVal != 42 {
+		t.Errorf("expected identifier 42, got %v", msg.IdentifierVal)
+	}
+}
+
 // --------------------------------------------------------------------------
-// swissecho.go dispatch tests
+// dispatch / SendResult tests
 // --------------------------------------------------------------------------
+
+func TestQuick_ReturnsStructuredSendResult(t *testing.T) {
+	gw := &fakeGateway{}
+	client := swissecho.New(buildConfig(gw))
+	result, err := client.Quick("2348012345678", "Hello!")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Status {
+		t.Error("expected Status=true on success")
+	}
+	if result.Route != "sms" {
+		t.Errorf("expected Route='sms', got %q", result.Route)
+	}
+	if result.Body != "Hello!" {
+		t.Errorf("expected Body='Hello!', got %q", result.Body)
+	}
+	if result.Timestamp.IsZero() {
+		t.Error("expected non-zero Timestamp")
+	}
+}
 
 func TestQuick_CallsBootAndSend(t *testing.T) {
 	gw := &fakeGateway{}
 	client := swissecho.New(buildConfig(gw))
-
 	_, err := client.Quick("2348012345678", "Hello!")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -156,7 +204,6 @@ func TestQuick_SetsDefaultSender(t *testing.T) {
 	gw := &fakeGateway{}
 	client := swissecho.New(buildConfig(gw))
 	client.Quick("2348012345678", "Hello!")
-
 	if gw.lastMsg.SenderID != "TestSender" {
 		t.Errorf("expected sender 'TestSender', got %q", gw.lastMsg.SenderID)
 	}
@@ -165,37 +212,45 @@ func TestQuick_SetsDefaultSender(t *testing.T) {
 func TestQuick_MessageSenderOverridesDefault(t *testing.T) {
 	gw := &fakeGateway{}
 	client := swissecho.New(buildConfig(gw))
-	client.Message().To("2348012345678").Content("Hello!").Sender("CustomSender").Go()
-
-	if gw.lastMsg.SenderID != "CustomSender" {
-		t.Errorf("expected sender 'CustomSender', got %q", gw.lastMsg.SenderID)
+	client.Message().To("2348012345678").Content("Hello!").Sender("Custom").Go()
+	if gw.lastMsg.SenderID != "Custom" {
+		t.Errorf("expected sender 'Custom', got %q", gw.lastMsg.SenderID)
 	}
 }
 
-func TestDispatch_BootError_IsReturnedAndLogged(t *testing.T) {
+func TestDispatch_BootError_ReturnsFailedResult(t *testing.T) {
 	gw := &fakeGateway{bootErr: fmt.Errorf("boot failed")}
 	client := swissecho.New(buildConfig(gw))
-
-	_, err := client.Quick("2348012345678", "Hello!")
-	if err == nil || !strings.Contains(err.Error(), "boot failed") {
-		t.Errorf("expected boot error to be returned, got %v", err)
+	result, err := client.Quick("2348012345678", "Hello!")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status {
+		t.Error("expected Status=false on failure")
+	}
+	if result.Err == nil {
+		t.Error("expected non-nil Err on failure")
+	}
+	if result.Timestamp.IsZero() {
+		t.Error("expected Timestamp even on failure")
 	}
 }
 
-func TestDispatch_SendError_IsReturnedAndLogged(t *testing.T) {
+func TestDispatch_SendError_ReturnsFailedResult(t *testing.T) {
 	gw := &fakeGateway{sendErr: fmt.Errorf("send failed")}
 	client := swissecho.New(buildConfig(gw))
-
-	_, err := client.Quick("2348012345678", "Hello!")
-	if err == nil || !strings.Contains(err.Error(), "send failed") {
-		t.Errorf("expected send error to be returned, got %v", err)
+	result, err := client.Quick("2348012345678", "Hello!")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if result.Status {
+		t.Error("expected Status=false on send failure")
 	}
 }
 
 func TestDispatch_UnknownRoute_ReturnsError(t *testing.T) {
 	gw := &fakeGateway{}
 	client := swissecho.New(buildConfig(gw))
-
 	_, err := client.Route("nonexistent", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
 		return m.To("2348012345678").Content("Test")
 	}).Go()
@@ -205,12 +260,10 @@ func TestDispatch_UnknownRoute_ReturnsError(t *testing.T) {
 }
 
 func TestDispatch_MockMode_WhenDisabled(t *testing.T) {
-	// When Enabled=false, the package must route to MockGateway and NOT call the real gateway.
 	gw := &fakeGateway{}
 	config := buildConfig(gw)
 	config.Enabled = false
 	config.Fake = "log"
-
 	client := swissecho.New(config)
 	_, err := client.Quick("2348012345678", "Test mock")
 	if err != nil {
@@ -222,15 +275,135 @@ func TestDispatch_MockMode_WhenDisabled(t *testing.T) {
 }
 
 func TestDispatch_MockMode_NoRoutes(t *testing.T) {
-	// When Enabled=false and Routes is nil/empty, it must not panic.
-	config := swissecho.Config{
-		Enabled: false,
-		Fake:    "log",
-	}
+	config := swissecho.Config{Enabled: false, Fake: "log"}
 	client := swissecho.New(config)
 	_, err := client.Quick("2348012345678", "Safe in mock mode")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// AfterSend hook tests
+// --------------------------------------------------------------------------
+
+func TestAfterSend_CalledOnSuccess(t *testing.T) {
+	gw := &fakeGateway{}
+	client := swissecho.New(buildConfig(gw))
+
+	var captured swissecho.SendResult
+	client.OnAfterSend(func(r swissecho.SendResult) { captured = r })
+
+	client.Quick("2348012345678", "Hello")
+	if !captured.Status {
+		t.Error("AfterSend: expected Status=true")
+	}
+	if captured.Route != "sms" {
+		t.Errorf("AfterSend: expected Route='sms', got %q", captured.Route)
+	}
+}
+
+func TestAfterSend_CalledOnFailure(t *testing.T) {
+	gw := &fakeGateway{sendErr: fmt.Errorf("network error")}
+	client := swissecho.New(buildConfig(gw))
+
+	var captured swissecho.SendResult
+	client.OnAfterSend(func(r swissecho.SendResult) { captured = r })
+
+	client.Quick("2348012345678", "Hello")
+	if captured.Status {
+		t.Error("AfterSend: expected Status=false on failure")
+	}
+	if captured.Err == nil {
+		t.Error("AfterSend: expected non-nil Err on failure")
+	}
+}
+
+func TestAfterSend_IncludesIdentifier(t *testing.T) {
+	gw := &fakeGateway{}
+	client := swissecho.New(buildConfig(gw))
+
+	var captured swissecho.SendResult
+	client.OnAfterSend(func(r swissecho.SendResult) { captured = r })
+
+	client.Message().To("2348012345678").Content("Hello").Identifier(99).Go()
+	if captured.Identifier != 99 {
+		t.Errorf("AfterSend: expected Identifier=99, got %v", captured.Identifier)
+	}
+}
+
+func TestAfterSend_IncludesTimestamp(t *testing.T) {
+	gw := &fakeGateway{}
+	client := swissecho.New(buildConfig(gw))
+
+	var captured swissecho.SendResult
+	client.OnAfterSend(func(r swissecho.SendResult) { captured = r })
+
+	before := time.Now()
+	client.Quick("2348012345678", "Hello")
+	after := time.Now()
+
+	if captured.Timestamp.Before(before) || captured.Timestamp.After(after) {
+		t.Errorf("AfterSend: Timestamp %v is outside expected range [%v, %v]", captured.Timestamp, before, after)
+	}
+}
+
+// --------------------------------------------------------------------------
+// Place builder + default place fallback tests
+// --------------------------------------------------------------------------
+
+func TestMessage_Place_SetOnRunner(t *testing.T) {
+	gw := &fakeGateway{}
+	config := swissecho.Config{
+		Enabled:      true,
+		DefaultRoute: "sms",
+		Routes: map[string]swissecho.RouteConfig{
+			"sms": {
+				Gateways: map[string]swissecho.GatewayConfig{"fake": {Class: gw}},
+				Places: map[string]swissecho.Place{
+					"nga": {Gateway: "fake", PhoneCode: "234"},
+				},
+			},
+		},
+	}
+	client := swissecho.New(config)
+	client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
+		return m.To("08012345678").Content("Hello").Place("nga")
+	}).Go()
+	if len(gw.lastMsg.Recipients) == 0 {
+		t.Fatal("no recipients")
+	}
+	if gw.lastMsg.Recipients[0] != "2348012345678" {
+		t.Errorf("expected '2348012345678', got %q", gw.lastMsg.Recipients[0])
+	}
+}
+
+func TestDispatch_DefaultPlaceFallback(t *testing.T) {
+	// When PlaceName is empty, dispatch should fall back to the first place in config
+	gw := &fakeGateway{}
+	config := swissecho.Config{
+		Enabled:      true,
+		DefaultRoute: "sms",
+		Routes: map[string]swissecho.RouteConfig{
+			"sms": {
+				Gateways: map[string]swissecho.GatewayConfig{"fake": {Class: gw}},
+				Places: map[string]swissecho.Place{
+					"nga": {Gateway: "fake", PhoneCode: "234"},
+				},
+			},
+		},
+	}
+	client := swissecho.New(config)
+	// No .Place() called → should auto-select "nga"
+	client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
+		return m.To("08012345678").Content("Hello")
+	}).Go()
+
+	if len(gw.lastMsg.Recipients) == 0 {
+		t.Fatal("no recipients — default place fallback not working")
+	}
+	if gw.lastMsg.Recipients[0] != "2348012345678" {
+		t.Errorf("expected '2348012345678' from default place, got %q", gw.lastMsg.Recipients[0])
 	}
 }
 
@@ -247,21 +420,14 @@ func TestDispatch_PhoneFormatting_StripsLeadingPlus(t *testing.T) {
 			"sms": {
 				DefaultGateway: "fake",
 				Gateways:       map[string]swissecho.GatewayConfig{"fake": {Class: gw}},
-				Places: map[string]swissecho.Place{
-					"nga": {Gateway: "fake", PhoneCode: "234"},
-				},
+				Places:         map[string]swissecho.Place{"nga": {Gateway: "fake", PhoneCode: "234"}},
 			},
 		},
 	}
 	client := swissecho.New(config)
-	msg := swissecho.NewMessage().To("+2348012345678").Content("Hello")
-	msg.PlaceName = "nga"
-	// Use Message() to send with a pre-built message
 	client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
-		return m.To("+2348012345678").Content("Hello")
+		return m.To("+2348012345678").Content("Hello").Place("nga")
 	}).Go()
-
-	// The number should not have a leading +
 	for _, r := range gw.lastMsg.Recipients {
 		if strings.HasPrefix(r, "+") {
 			t.Errorf("recipient still has leading '+': %s", r)
@@ -278,23 +444,18 @@ func TestDispatch_PhoneFormatting_StripsAllLeadingZeros(t *testing.T) {
 			"sms": {
 				DefaultGateway: "fake",
 				Gateways:       map[string]swissecho.GatewayConfig{"fake": {Class: gw}},
-				Places: map[string]swissecho.Place{
-					"nga": {Gateway: "fake", PhoneCode: "234"},
-				},
+				Places:         map[string]swissecho.Place{"nga": {Gateway: "fake", PhoneCode: "234"}},
 			},
 		},
 	}
 	client := swissecho.New(config)
-	// Simulate a Place match by calling with PlaceName on an inner message trick
 	client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
 		m.PlaceName = "nga"
 		return m.To("08012345678").Content("Hello")
 	}).Go()
-
 	if len(gw.lastMsg.Recipients) == 0 {
 		t.Fatal("no recipients found")
 	}
-	// After stripping "0" and prepending "234", should be 2348012345678
 	expected := "2348012345678"
 	if gw.lastMsg.Recipients[0] != expected {
 		t.Errorf("expected %q, got %q", expected, gw.lastMsg.Recipients[0])
@@ -310,11 +471,9 @@ func TestMemoryQueue_GoAsync_RequiresQueueEnabled(t *testing.T) {
 	config := buildConfig(gw)
 	config.Queue.Enabled = false
 	client := swissecho.New(config)
-
 	err := client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
 		return m.To("2348012345678").Content("async test")
 	}).GoAsync()
-
 	if err == nil {
 		t.Error("expected an error when queue is not enabled")
 	}
@@ -323,21 +482,14 @@ func TestMemoryQueue_GoAsync_RequiresQueueEnabled(t *testing.T) {
 func TestMemoryQueue_GoAsync_Dispatches(t *testing.T) {
 	gw := &fakeGateway{}
 	config := buildConfig(gw)
-	config.Queue = swissecho.QueueConfig{
-		Enabled:      true,
-		QueueChannel: "memory",
-		Workers:      1,
-	}
+	config.Queue = swissecho.QueueConfig{Enabled: true, QueueChannel: "memory", Workers: 1}
 	client := swissecho.New(config)
-
 	err := client.Route("sms", func(m *swissecho.SwissechoMessage) *swissecho.SwissechoMessage {
 		return m.To("2348012345678").Content("async test")
 	}).GoAsync()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Give the worker goroutine a moment to process
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if gw.sendCalled {
@@ -351,26 +503,10 @@ func TestMemoryQueue_GoAsync_Dispatches(t *testing.T) {
 }
 
 func TestMemoryQueue_FullBuffer_ReturnsError(t *testing.T) {
-	// Create a queue with a tiny buffer of 1 so we can easily fill it
-	gw := &fakeGateway{
-		// Make Send block so the channel stays full
-		sendErr: fmt.Errorf("intentional slow send"),
-	}
-	config := buildConfig(gw)
-	config.Queue = swissecho.QueueConfig{
-		Enabled:      true,
-		QueueChannel: "memory",
-		Workers:      0, // No workers — nothing drains the channel
-	}
-
-	// We need to bypass the QueueConfig.Workers=0 default (which becomes 5)
-	// so test the queue Push directly
 	q := swissecho.NewMemoryQueueWithSize(1)
 	msg := swissecho.NewMessage().To("1234").Content("test")
-
-	_ = q.Push(msg) // fills the buffer
-
-	err := q.Push(msg) // should return error, not block
+	_ = q.Push(msg)
+	err := q.Push(msg)
 	if err == nil {
 		t.Error("expected error when pushing to a full queue")
 	}
@@ -381,7 +517,6 @@ func TestQuickAsync_RequiresQueueEnabled(t *testing.T) {
 	config := buildConfig(gw)
 	config.Queue.Enabled = false
 	client := swissecho.New(config)
-
 	err := client.QuickAsync("2348012345678", "test")
 	if err == nil {
 		t.Error("expected error when queue is not enabled")

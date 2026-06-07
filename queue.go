@@ -12,7 +12,7 @@ import (
 
 type DispatchQueue interface {
 	Push(msg *SwissechoMessage) error
-	StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (interface{}, error))
+	StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (SendResult, error))
 }
 
 // MemoryQueue uses standard go channels
@@ -41,7 +41,7 @@ func (q *MemoryQueue) Push(msg *SwissechoMessage) error {
 	}
 }
 
-func (q *MemoryQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (interface{}, error)) {
+func (q *MemoryQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (SendResult, error)) {
 	if workers <= 0 {
 		workers = 5
 	}
@@ -83,7 +83,7 @@ func (q *RedisQueue) Push(msg *SwissechoMessage) error {
 	return q.client.LPush(q.ctx, "swissecho_queue", b).Err()
 }
 
-func (q *RedisQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (interface{}, error)) {
+func (q *RedisQueue) StartWorkers(workers int, dispatchFunc func(msg *SwissechoMessage) (SendResult, error)) {
 	if workers <= 0 {
 		workers = 5
 	}

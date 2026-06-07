@@ -11,6 +11,7 @@ type SwissechoMessage struct {
 	GatewayName string
 	PhoneCode   string
 	PlaceName   string
+	IdentifierVal interface{} // Optional: tag messages with a user/entity reference for AfterSend tracking
 }
 
 // NewMessage creates a new, empty SwissechoMessage.
@@ -30,15 +31,19 @@ func (m *SwissechoMessage) To(to string) *SwissechoMessage {
 }
 
 // Sender overrides the default sender for this message.
+// Sender IDs are automatically truncated to 11 characters to comply with SMS standards.
 func (m *SwissechoMessage) Sender(sender string) *SwissechoMessage {
+	if len(sender) > 11 {
+		sender = sender[:11]
+	}
 	m.SenderID = sender
 	return m
 }
 
 // Content sets the full body of the message.
+// Calling Content() multiple times appends lines, matching PHP behaviour.
 func (m *SwissechoMessage) Content(content string) *SwissechoMessage {
-	m.Body = content
-	return m
+	return m.Line(content)
 }
 
 // Line appends a line to the message body.
@@ -59,5 +64,18 @@ func (m *SwissechoMessage) Route(route string) *SwissechoMessage {
 // Gateway overrides the default gateway for this message.
 func (m *SwissechoMessage) Gateway(gateway string) *SwissechoMessage {
 	m.GatewayName = gateway
+	return m
+}
+
+// Place sets the geo-routing place key for this message (e.g. "nga", "aus").
+func (m *SwissechoMessage) Place(place string) *SwissechoMessage {
+	m.PlaceName = place
+	return m
+}
+
+// Identifier tags this message with an arbitrary reference value (e.g. a user ID).
+// The identifier is included in the AfterSend callback for post-send correlation.
+func (m *SwissechoMessage) Identifier(id interface{}) *SwissechoMessage {
+	m.IdentifierVal = id
 	return m
 }
